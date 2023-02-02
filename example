@@ -1,0 +1,21 @@
+// This script will ouput all search terms that had over 100 clicks last 30 days, and zero conversions.
+// During the course you will learn how to automatically send this report to your email every day, week or month
+ 
+function main() {
+ 
+  var report = AdWordsApp.report(
+  "SELECT Query,Clicks,Cost " +
+  "FROM SEARCH_QUERY_PERFORMANCE_REPORT " +
+  "WHERE " +
+  "Clicks >= 100 " +
+  "AND Conversions < 1 " +
+  "DURING LAST_30_DAYS");
+ 
+  var rows = report.rows();
+ 
+  while(rows.hasNext()){
+    var row = rows.next();
+    Logger.log(row['Query']+";"+row['Clicks']+";"+row['Cost']);
+  }
+ 
+}
