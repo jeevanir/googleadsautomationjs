@@ -1,0 +1,198 @@
+// Copyright 2017, Nils Rooijmans, All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+/**
+* @overview:
+* For each campaign that is NOT labeled 'noBudgetAlert' this script will compare the anticipated ad spend based on daily budget settings with the actual ad spend. 
+* In case of big differences (overdelivery by Google) it will report an alert, log the alert in the specified Google Sheet and inform about the alert via email
+* 
+* For the MCC version please contact Nils Rooijmans [nils@nilsrooijmans.com]
+*
+* @author:  Nils Rooijmans [nils@nilsrooijmans.com]
+* @version: 1.0
+*/
+
+// 
+var SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1IeEJLNt17XhRFUM3RyGgcqvB1Xt8XVS1NQQHtp-Ysg4/edit#gid=0";  //insert a new blank spreadsheet url, replace everything between and including the square brackets
+var EMAIL = "jeev.raya@irosacea.org"; //insert your email, replace everything between and including the square brackets
+
+var CAMPAIGNLABEL = "noBudgetAlert";  //campaign level label for campaigns to ignore
+
+var firstRun = true; // set to false if you schedule the script to run on daily basis, set to true for first run or if you run only once
+
+// Config variables to set the percentage of overdelivery allowed before an alert is sent
+var dailySpendAlertThreshold = 0.2; // alert if overdelivery is greater than 20% of daily budget
+var weeklySpendAlertThreshold = 0.1; // alert if overdelivery is greater than 10% of 7 times the daily budget (for the 7 days before today)
+var fourWeeklySpendAlertThreshold = 0.05; // alert if overdelivery is greater than 5% of 28 times the daily budget (for the 28 days before today)
+
+
+function main() {  
+
+  var accountAlert = false;
+  var campaignAlert_dailyCheck = false;
+  var campaignAlert_weeklyCheck = false;
+  var campaignAlert_fourWeeklyCheck = false;
+  
+  var adSpendYesterday = 0;
+  var adSpend1to7DaysAgo = 0;
+  var adSpend1to28DaysAgo = 0;
+  var differenceDailyCheck = 0;
+  var differenceWeeklyCheck = 0;
+  var differenceFourWeeklyCheck = 0;
+  
+  var d = Utilities.formatDate(new Date(), AdWordsApp.currentAccount().getTimeZone(), "MMM dd,yyyy");
+  var dayOfTheWeek = new Date(d).getDay(); 
+  var dayOfTheMonth = new Date(d).getDate();
+
+  //prepare the sheet
+  var ss = SpreadsheetApp.openByUrl(SPREADSHEET_URL);
+  var sheet = ss.getActiveSheet();
+  if (sheet.getRange('A1').isBlank()) {
+    sheet.appendRow([
+    "Date", 
+    "Account Name", 
+    "Campaign Name", 
+    "Ad Spend Yesterday", 
+    "Anticipated Spend", 
+    "Difference", 
+    "Ad Spend 1 to 7 Days Ago", 
+    "Anticipated Spend", 
+    "Difference", 
+    "Ad Spend 1 to 28 Days Ago", 
+    "Anticipated Spend", 
+    "Difference"
+    ]);
+  }
+  
+  // prepare contents of email
+  var html = [];
+  html.push(
+    "<html>",
+    "<body>", 
+    "<p>Alerts are logged in sheet: ", SPREADSHEET_URL ,"</p>",
+    "<p>----------------------------------------------------</p>",
+    "<p>OVERDELIVERY ALERTS FOR:</P>",
+    "<P>ACCOUNT - CAMPAIGN</p>",
+    "<p>----------------------------------------------------</p>"
+  );  
+ 
+     
+  // if not already created, create label used to Ignore campaigns
+  // this is necessary for the script to run even if no campaign has been labeled
+  var labelName;
+  var labelExists = false;
+  var labelIterator = AdWordsApp.labels().get();
+  while (labelIterator.hasNext()) {
+    labelName = labelIterator.next().getName();
+    if (labelName.localeCompare(CAMPAIGNLABEL) == 0){labelExists = true; break;} else {labelExists = false}
+  }
+  if (labelExists == false) {
+    AdWordsApp.createLabel(CAMPAIGNLABEL);
+    Logger.log("labelCreated");
+  } else {
+    Logger.log("labelExists");
+  } 
+  
+  
+  // Let's check the campaigns for overdelivery
+  Logger.log("Checking account: "+AdWordsApp.currentAccount().getName());    
+  
+  var campaignSelector = AdWordsApp.campaigns()
+     .withCondition("LabelNames CONTAINS_NONE ['" + CAMPAIGNLABEL + "']")
+     .withCondition("Status = ENABLED")
+     .forDateRange("YESTERDAY");
+  
+  var campaignIterator = campaignSelector.get();
+  
+  while (campaignIterator.hasNext()) {
+    var campaign = campaignIterator.next();
+    Logger.log("    Checking Campaign: "+campaign.getName());
+
+    var campaignAlert_dailyCheck = false;
+    var campaignAlert_weeklyCheck = false;
+    var campaignAlert_fourWeeklyCheck = false;
+    
+    var anticipatedDailyAdSpend = campaign.getBudget().getAmount();
+    var anticipatedWeeklyAdSpend = 7 * anticipatedDailyAdSpend;
+    var anticipatedFourWeeklyAdSpend = 28 * anticipatedDailyAdSpend;
+
+    // daily check
+    //Logger.log("DAILY CHECK");
+    adSpendYesterday = campaign.getStatsFor("YESTERDAY").getCost();
+    differenceDailyCheck = (adSpendYesterday-anticipatedDailyAdSpend)/anticipatedDailyAdSpend;
+    if (differenceDailyCheck > dailySpendAlertThreshold ) {
+       campaignAlert_dailyCheck = true;
+       Logger.log("DAILY overdelivery spend alert");
+    }
+    
+    // weekly check  
+    if (dayOfTheWeek == 1 || firstRun){  // if not the firstRun this check runs only on mondays
+      //Logger.log("WEEKLY CHECK");
+      adSpend1to7DaysAgo = campaign.getStatsFor(dateBefore(7),dateBefore(1)).getCost();
+      differenceWeeklyCheck = (adSpend1to7DaysAgo-anticipatedWeeklyAdSpend)/anticipatedWeeklyAdSpend;
+      if (differenceWeeklyCheck > weeklySpendAlertThreshold ) {
+         campaignAlert_weeklyCheck = true;
+         Logger.log("WEEKLY overdelivery spend alert");
+      }
+    }
+
+    // 4 weekly check
+    if ((dayOfTheWeek == 1 && dayOfTheMonth < 8) || firstRun){ //if not the firstRun this check runs only on the first monday in a month //Logger.log("MONTHLY CHECK"); adSpend1to28DaysAgo = campaign.getStatsFor(dateBefore(28),dateBefore(1)).getCost(); differenceFourWeeklyCheck = (adSpend1to28DaysAgo-anticipatedFourWeeklyAdSpend)/anticipatedFourWeeklyAdSpend; if (differenceFourWeeklyCheck > fourWeeklySpendAlertThreshold) {
+         campaignAlert_fourWeeklyCheck = true;
+         Logger.log("4-WEEKLY overdelivery spend alert");           
+      }   
+    }
+  
+    // add alerts to sheet  
+    if (campaignAlert_dailyCheck||campaignAlert_weeklyCheck||campaignAlert_fourWeeklyCheck) {
+
+      accountAlert = true;
+        
+      sheet.appendRow([
+        d, 
+        AdWordsApp.currentAccount().getName(), 
+        campaign.getName(), 
+        adSpendYesterday, 
+        anticipatedDailyAdSpend, 
+        (differenceDailyCheck*100).toFixed(1)+"%", 
+        adSpend1to7DaysAgo, 
+        anticipatedWeeklyAdSpend, 
+        (differenceWeeklyCheck*100).toFixed(1)+"%", 
+        adSpend1to28DaysAgo, anticipatedFourWeeklyAdSpend, 
+        (differenceFourWeeklyCheck*100).toFixed(1)+"%"
+      ]);  
+      
+      Logger.log("ALERT ADDED TO SHEET");
+      
+      if (campaignAlert_dailyCheck) sheet.getRange(sheet.getLastRow(), 6).setFontColor("red");
+      if (campaignAlert_weeklyCheck) sheet.getRange(sheet.getLastRow(), 9).setFontColor("red");
+      if (campaignAlert_fourWeeklyCheck) sheet.getRange(sheet.getLastRow(), 12).setFontColor("red");
+      
+      html.push("<p>" + AdWordsApp.currentAccount().getName() + " | " + campaign.getName() + "</p>");             
+    }
+
+  if (accountAlert) { // if there is any alert for any of the campaigns , send email
+    MailApp.sendEmail(EMAIL, "Overdelivery Alerts", "", {htmlBody: html.join("\n")});
+  }
+
+}
+  
+function dateBefore(days){ 
+  var MILLIS_PER_DAY = 1000 * 60 * 60 * 24;
+  var now = new Date();
+  var dateBefore = new Date(now.getTime() - days * MILLIS_PER_DAY);
+  var timeZone = AdWordsApp.currentAccount().getTimeZone();
+  return Utilities.formatDate(dateBefore, timeZone, 'yyyyMMdd');
+}
