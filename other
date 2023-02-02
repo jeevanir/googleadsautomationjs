@@ -1,0 +1,8 @@
+function main() {
+   var keywordOperation = adGroup.newKeywordBuilder()
+    .withText("text")
+    .withCpc(1.5)
+    .withFinalUrl("http://www.irosacea.org")
+    .build();
+ var keyword = keywordOperation.getResult();
+}
