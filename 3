@@ -1,0 +1,10 @@
+ // Creates a CsvUpload with 3 columns named 'columnA', 'columnB' and 'columnC', respectively.
+ var upload1 = AdsApp.bulkUploads().newCsvUpload(
+     ['columnA', 'columnB', 'columnC']);
+
+ // Creates a CsvUpload which represents money in currency (e.g. 1.37) instead of in micros
+ // (e.g. 137000).
+ var upload2 = AdsApp.bulkUploads().newCsvUpload(
+     ['columnA', 'columnB', 'columnC'], {
+       moneyInMicros: false
+     });
